@@ -1,18 +1,7 @@
-# Web UI
-streamlit==1.37.0  
-
-# Web crawling & parsing
-requests==2.32.3  
-beautifulsoup4==4.12.3  
-tldextract==5.1.2  
-python-whois==0.8.0  
-
-# AI/ML (text classification)
-transformers==4.44.2  
-torch==2.3.1  
-sentencepiece==0.2.0  
-scikit-learn==1.5.1  
-
-# Optional utilities
-pandas==2.2.2  
-numpy==1.26.4  
+streamlit
+requests
+beautifulsoup4
+tldextract
+python-whois
+transformers
+torch
