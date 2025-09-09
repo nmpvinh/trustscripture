@@ -1,115 +1,110 @@
+import streamlit as st
 import requests
-from bs4 import BeautifulSoup
 import tldextract
 import whois
+from bs4 import BeautifulSoup
 from transformers import pipeline
-import streamlit as st
-from datetime import datetime
 
-# -----------------------
-# Load AI model
-# -----------------------
+# ========== 1. Load model Hugging Face ==========
 @st.cache_resource
 def load_model():
-    return pipeline("zero-shot-classification",
-                    model="joeddav/xlm-roberta-large-xnli")
+    return pipeline("text-classification", model="distilbert-base-uncased-finetuned-sst-2-english")
 
-classifier = load_model()
+nlp_model = load_model()
 
-# -----------------------
-# Crawl nội dung website
-# -----------------------
-def crawl_page(url):
+# ========== 2. Rule-based checks ==========
+def rule_based_check(url: str):
+    issues = []
+    score = 0
+
+    # Extract domain
+    domain_info = tldextract.extract(url)
+    domain = f"{domain_info.domain}.{domain_info.suffix}"
+
+    # Rule 1: URL quá dài
+    if len(url) > 75:
+        issues.append("URL quá dài, có thể là dấu hiệu giả mạo.")
+        score += 1
+
+    # Rule 2: WHOIS ẩn
     try:
-        response = requests.get(url, timeout=10)
-        response.raise_for_status()
+        w = whois.whois(domain)
+        if not w.organization:
+            issues.append("WHOIS bị ẩn hoặc thiếu thông tin.")
+            score += 1
+    except Exception:
+        issues.append("Không truy xuất được WHOIS.")
+        score += 1
+
+    # Rule 3: Domain miễn phí hoặc bất thường
+    if domain_info.suffix in ["tk", "ml", "ga", "cf", "gq"]:
+        issues.append(f"Domain sử dụng TLD miễn phí: {domain_info.suffix}")
+        score += 1
+
+    return score, issues
+
+# ========== 3. AI-based checks ==========
+def ai_based_check(url: str):
+    try:
+        response = requests.get(url, timeout=5)
         soup = BeautifulSoup(response.text, "html.parser")
-        text = " ".join([p.get_text() for p in soup.find_all("p")])
-        return text[:2000]
+        text_content = " ".join(soup.stripped_strings)[:500]  # lấy 500 ký tự đầu
+        result = nlp_model(text_content)[0]
+        return result
     except Exception as e:
-        return f"Lỗi khi crawl: {e}"
+        return {"label": "ERROR", "score": 0.0, "error": str(e)}
 
-# -----------------------
-# Phân tích domain
-# -----------------------
-def analyze_domain(url):
-    ext = tldextract.extract(url)
-    domain = f"{ext.domain}.{ext.suffix}"
-    suspicious_score = 0
+# ========== 4. Streamlit UI ==========
+st.set_page_config(page_title="Fake Website Detector", page_icon="🛡️", layout="wide")
 
-    if ext.suffix not in ["org", "com", "net", "vn"]:
-        suspicious_score += 20
-    if any(word in ext.domain.lower() for word in ["jesus", "bible", "vatican", "church"]):
-        suspicious_score += 10
-    try:
-        domain_info = whois.whois(domain)
-        if domain_info.creation_date:
-            creation_date = domain_info.creation_date[0] if isinstance(domain_info.creation_date, list) else domain_info.creation_date
-            if (datetime.now() - creation_date).days < 365:
-                suspicious_score += 30
-    except:
-        suspicious_score += 20
+st.title("🛡️ Fake Website Detector")
+st.markdown("Công cụ phát hiện website giả mạo / lừa đảo về Kitô giáo & Kinh Thánh.")
 
-    return domain, suspicious_score
-
-# -----------------------
-# Phân tích nội dung bằng AI
-# -----------------------
-def analyze_content(text):
-    if "Lỗi khi crawl" in text:
-        return 0, "unknown"
-
-    labels = ["legit", "fake", "scam"]
-    result = classifier(text, labels)
-    label = result["labels"][0]
-    score = result["scores"][0]
-
-    suspicious_score = 0
-    if label == "fake":
-        suspicious_score += 40
-    elif label == "scam":
-        suspicious_score += 70
-
-    return suspicious_score, f"{label} ({round(score*100,2)}%)"
-
-# -----------------------
-# Dashboard Streamlit
-# -----------------------
-st.set_page_config(page_title="Fake Website Detector", layout="centered")
-st.title("🛡️ Fake Website Detector (Kinh Thánh & Kitô giáo)")
-
-url = st.text_input("🔗 Nhập URL website cần kiểm tra:")
+url = st.text_input("🔗 Nhập URL để kiểm tra:", "https://example.com")
 
 if st.button("Kiểm tra"):
-    if url:
-        st.write(f"Đang kiểm tra: **{url}**")
-
-        # Crawl + phân tích
-        text = crawl_page(url)
-        domain, score_domain = analyze_domain(url)
-        score_content, label_ai = analyze_content(text)
-
-        # Tổng điểm
-        total_score = score_domain + score_content
-        risk_level = "✅ An toàn"
-        color = "green"
-        if total_score >= 70:
-            risk_level = "🚨 Nguy hiểm"
-            color = "red"
-        elif total_score >= 40:
-            risk_level = "⚠️ Đáng ngờ"
-            color = "orange"
-
-        # Hiển thị kết quả
-        st.subheader("Kết quả phân tích")
-        st.markdown(f"- **Domain**: {domain}")
-        st.markdown(f"- **Điểm domain**: {score_domain}")
-        st.markdown(f"- **AI phân loại**: {label_ai}")
-        st.markdown(f"- **Điểm nội dung (AI)**: {score_content}")
-        st.markdown(f"- **➡️ Tổng điểm rủi ro**: {total_score} | <span style='color:{color}'>{risk_level}</span>", unsafe_allow_html=True)
-
-        # Xem trước nội dung crawl
-        with st.expander("📄 Xem nội dung crawl được"):
-            st.write(text)
+    if not url.startswith("http"):
+        st.warning("⚠️ Hãy nhập URL đầy đủ (bao gồm http:// hoặc https://)")
     else:
-        st.warning("Vui lòng nhập URL trước khi kiểm tra.")
+        with st.spinner("Đang phân tích..."):
+            # Rule-based
+            rule_score, rule_issues = rule_based_check(url)
+
+            # AI-based
+            ai_result = ai_based_check(url)
+
+        # ========== Hiển thị kết quả ==========
+        st.subheader("📊 Kết quả kiểm tra")
+
+        col1, col2 = st.columns(2)
+
+        with col1:
+            st.markdown("### Rule-based check")
+            if rule_issues:
+                for issue in rule_issues:
+                    st.error(f"- {issue}")
+            else:
+                st.success("Không phát hiện dấu hiệu đáng ngờ.")
+
+        with col2:
+            st.markdown("### AI-based check")
+            if ai_result.get("label") == "ERROR":
+                st.error(f"Lỗi khi phân tích nội dung: {ai_result.get('error')}")
+            else:
+                label = ai_result["label"]
+                score = round(ai_result["score"] * 100, 2)
+                if label == "NEGATIVE":
+                    st.error(f"AI đánh giá nội dung KHẢ NGHI ({score}%)")
+                else:
+                    st.success(f"AI đánh giá nội dung AN TOÀN ({score}%)")
+
+        # ========== Tổng kết ==========
+        risk_level = rule_score
+        if ai_result.get("label") == "NEGATIVE":
+            risk_level += 1
+
+        st.subheader("🧾 Kết luận")
+        if risk_level >= 2:
+            st.error("⚠️ Website có khả năng GIẢ MẠO hoặc LỪA ĐẢO.")
+        else:
+            st.success("✅ Website có vẻ an toàn.")
